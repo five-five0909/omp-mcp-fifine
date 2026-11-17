@@ -4,27 +4,183 @@ A local single-user OMP orchestration platform: **MCP bridge → persistent supe
 
 [完整中文说明](README.zh-CN.md)
 
-## Requirements and startup
+## Installation: clone to first task
 
-Linux/WSL with `/proc` and Unix sockets, Node >=22.13 with built-in `node:sqlite`, and authenticated OMP. Offline tests use a deterministic fake OMP and require no credentials or network. Current local runtime: Node 26.8.1, OMP 18.18.7.
+**Clone the source and run it directly: no build step or `npm install` is needed.** This project does not install OMP or include model credentials. A working setup has three parts: configured OMP, a running independent supervisor, and an MCP client.
+
+### 1. Check prerequisites
+
+- Linux/WSL with `/proc` and Unix sockets. This project's supervisor does not currently support native Windows/macOS; this does not describe OMP's own platform support.
+- Node >=22.13 with built-in `node:sqlite`, plus Git. Locally verified runtime: Node 26.8.1.
+- Installed OMP with an authenticated, usable model. Local discovery was verified against OMP 18.18.7.
+- A systemd user manager for managed background mode only; foreground mode is the alternative.
+
+Run everything **inside WSL** when using WSL, not in Windows PowerShell:
 
 ```bash
-# Foreground scheduler, for debugging
-node /opt/dev-space/omp-mcp-fifine/src/supervisor.js start
-
-# Alternatively: explicit transient systemd user service, independent of the terminal
-node /opt/dev-space/omp-mcp-fifine/src/service.js start
-node /opt/dev-space/omp-mcp-fifine/src/service.js status
-node /opt/dev-space/omp-mcp-fifine/src/service.js logs
-node /opt/dev-space/omp-mcp-fifine/src/service.js stop
-
-# Generate a client snippet; never edits user configuration
-node /opt/dev-space/omp-mcp-fifine/scripts/client-config.js standard-json
+git --version
+node --version
+node -e "require('node:sqlite'); console.log('SQLite OK')"
 ```
 
-MCP command: `node /opt/dev-space/omp-mcp-fifine/src/server.js`. Start the supervisor explicitly first. The generator keeps the upstream `omp` service key; rename the new entry to `omp-fifine` if the old bridge remains connected. No client config, boot service, linger setting or public deployment is automatically installed.
+### 2. Install and configure OMP
 
-Default data: `~/.omp/omp-mcp-fifine`, isolated from upstream data. Set the same absolute `OMP_WORKER_HOME` for both bridge and supervisor. A transient service is not boot persistence: restart it after machine reboot/WSL shutdown. Stopping the scheduler leaves authorized runners alive and pending tasks resume at scheduler restart.
+Skip installation if `omp --version` already works. Otherwise review the [official OMP installation instructions](https://omp.sh) and installer before running the official command:
+
+```bash
+curl -fsSL https://omp.sh/install | sh
+```
+
+Follow its PATH instructions or open a new terminal, then check:
+
+```bash
+command -v omp
+omp --version
+# Interactive provider login for OAuth; skip if API-key/custom-provider auth is already configured
+omp login
+omp models
+omp config get modelRoles --json
+omp config path
+```
+
+Configure API keys/custom providers through OMP itself, not this repository or MCP JSON. Confirm that OMP lists a model you can actually use. The default task agent selects role `task`; a populated model catalog does **not** imply that role exists. If needed, merge this into `config.yml` under the directory returned by `omp config path`, preserving other settings:
+
+```yaml
+modelRoles:
+  task: your-provider/your-model-id
+```
+
+Replace the placeholder with an actual full model identifier from `omp models`. Alternatively pass an explicit `model` or an existing `role` on every `run`. Never pass both.
+
+### 3. Clone and check the project
+
+The example uses a user-owned directory and requires no root. `OMP_MCP_DIR` is only a convenience variable used in this guide.
+
+```bash
+export OMP_MCP_DIR="$HOME/omp-mcp-fifine"
+git clone https://github.com/five-five0909/omp-mcp-fifine.git "$OMP_MCP_DIR"
+
+# Check the OMP binary, role configuration and agent listing; no model request
+# Run from the clone so project-level OMP settings are resolved there
+(cd "$OMP_MCP_DIR" && node src/server.js --self-check)
+
+# Offline fixture tests: no network, model credentials or model charges
+npm --prefix "$OMP_MCP_DIR" run check
+```
+
+`--self-check` does not query the model catalog or validate credentials against a provider. It may report `ok:true` without a `task` role; check the returned `roles` and use the explicit model/role approach above. Later, pass the intended project directory as `cwd` to MCP `models`/`roles`, because OMP settings can differ between workspaces.
+
+For the existing installation on the maintainer's machine, set `OMP_MCP_DIR=/opt/dev-space/omp-mcp-fifine` instead of cloning into that nonempty directory. Other paths are supported. Ensure your user owns the installation directory; do not default to running model tasks as root.
+
+### 4. Start the supervisor — choose one mode
+
+**Recommended: transient systemd user service**, independent of the calling terminal:
+
+```bash
+# If the user manager is unavailable, use foreground mode instead
+systemctl --user is-system-running
+node "$OMP_MCP_DIR/src/service.js" start
+node "$OMP_MCP_DIR/src/service.js" status
+node "$OMP_MCP_DIR/src/supervisor.js" status
+```
+
+The supervisor status command should return JSON with `pid`, `max_concurrency` and task counts. Startup is asynchronous: if it is not ready yet, inspect service state and logs:
+
+```bash
+node "$OMP_MCP_DIR/src/service.js" logs
+```
+
+**Alternative: foreground mode**, without systemd. Keep this terminal/process running and open your MCP client in another terminal:
+
+```bash
+node "$OMP_MCP_DIR/src/supervisor.js" start
+# Wait for: supervisor ready
+```
+
+Do not run both modes for the same data directory. A kernel lock prevents duplicate supervisors. The managed service is transient, not boot-enabled; restart after reboot, WSL shutdown or user-manager exit. No linger setting is changed and survival after complete user logout is not guaranteed.
+
+### 5. Connect your MCP client
+
+Generate configuration using the **actual absolute Node and server paths** on your machine:
+
+```bash
+# CodeBuddy, Cursor and other mcpServers-JSON clients
+node "$OMP_MCP_DIR/scripts/client-config.js" standard-json
+# Claude Code: prints an installation command; review and execute that output yourself
+node "$OMP_MCP_DIR/scripts/client-config.js" claude
+# Codex: prints a TOML configuration snippet
+node "$OMP_MCP_DIR/scripts/client-config.js" codex
+# Other supported configuration renderers
+node "$OMP_MCP_DIR/scripts/client-config.js" --help
+```
+
+The generator only prints; it does not install anything. Merge the snippet into your client's existing MCP configuration without replacing unrelated entries, or review and execute the printed CLI command. Refresh MCP or start a new client session afterward.
+
+- The generated service key is `omp`. If the old OMP bridge is already configured, rename the new entry/CLI server name to `omp-fifine` and select that new service.
+- MCP launches `src/server.js`, **not** `src/supervisor.js`. Start the independent supervisor in step 4; the MCP bridge does not auto-start it.
+- Run both under the same Linux user, with consistent OMP configuration and `OMP_WORKER_HOME`.
+- Runtime data defaults to `~/.omp/omp-mcp-fifine`, separate from source and upstream data. When overriding it, set the same absolute value in the MCP entry's `env` and the supervisor environment.
+- GUI clients may not inherit terminal PATH. If OMP is missing, use the absolute path from `command -v omp` as `OMP_BIN` consistently on both sides.
+- Set the client tool timeout longer than the requested `wait` duration. A short wait timeout does not fail or cancel the worker.
+
+### 6. Verify the first task
+
+Ask the client to call `supervisor_status`, then `models` or `roles` with the intended project's absolute `cwd` on the new service. Call `run` with a real existing directory and discovered model:
+
+```json
+{
+  "prompt": "Reply with exactly PONG and nothing else.",
+  "cwd": "/absolute/path/to/an/existing/project",
+  "model": "your-provider/your-model-id",
+  "access": "read",
+  "max_time_sec": 60,
+  "idempotency_key": "installation-smoke-1"
+}
+```
+
+Follow with `wait` using the returned ID:
+
+```json
+{"job_id":"<job_id from run>","timeout_sec":90}
+```
+
+Success means `status: succeeded` and `PONG` in the result, not merely accepted submission. **This step calls a real model and may incur charges.** Offline tests do not verify your credentials or network. Change the idempotency key when deliberately starting a fresh test; exact replay returns the original job.
+
+## Stop, update and troubleshoot
+
+```bash
+# Managed service
+node "$OMP_MCP_DIR/src/service.js" stop
+# Foreground mode ONLY: Ctrl+C, or from another terminal
+node "$OMP_MCP_DIR/src/supervisor.js" stop
+```
+
+For managed mode, use `service.js stop`, not `supervisor.js stop`: the service has a restart-on-failure policy, and direct supervisor termination can trigger a restart.
+
+Stopping the scheduler is not cancellation: authorized runners continue and pending/DAG successors resume after scheduler restart. To stop a task, call `cancel` and inspect its result.
+
+Before updating, check your worktree and preferably wait for running tasks to finish. For managed-service mode:
+
+```bash
+git -C "$OMP_MCP_DIR" status --short
+# Preserve any local changes first; do not force-reset them
+node "$OMP_MCP_DIR/src/service.js" stop &&
+  git -C "$OMP_MCP_DIR" pull --ff-only &&
+  npm --prefix "$OMP_MCP_DIR" run check &&
+  node "$OMP_MCP_DIR/src/service.js" start
+```
+
+The `&&` chain stops on a failed pull/test; diagnose that failure before restarting. Do not continue over a failed update. Refresh the client's MCP connection too. Re-export `OMP_MCP_DIR` in new terminals if it is not already set.
+
+| Symptom | What to check |
+|---|---|
+| Cannot load `node:sqlite` | Actual Node selected by the client; regenerate config after upgrading |
+| OMP binary missing | `command -v omp`, PATH and matching `OMP_BIN`; restart service after changes |
+| Unknown role `task` | Configure a real task role, or pass an existing role/full model explicitly |
+| Supervisor unavailable | Start it independently; check same user, runtime directory and service logs |
+| Cannot connect to `systemctl --user` | Use foreground mode; not a model/MCP configuration failure |
+| Terminal works, client auth fails | Compare OMP configuration and credential-variable environments; never publish secrets in logs or Git |
+| `unknown` or blocked dependencies | Inspect evidence before manual resolution; never blindly replay uncertain work |
 
 ## Tools
 
@@ -69,11 +225,12 @@ Configuration: `OMP_MAX_CONCURRENCY` (2), `OMP_LOG_LIMIT_BYTES` (8388608), `OMP_
 ## Verification
 
 ```bash
-npm --prefix /opt/dev-space/omp-mcp-fifine run check
+npm --prefix "$OMP_MCP_DIR" run check
 # Optional transient systemd service test, fixture only
-node /opt/dev-space/omp-mcp-fifine/scripts/test-service.js
-# Opt-in real worker; incurs model usage, requires a valid role and running supervisor
-OMP_WORKER_SMOKE_ROLE=default npm --prefix /opt/dev-space/omp-mcp-fifine run check:worker
+npm --prefix "$OMP_MCP_DIR" run check:service
+# Opt-in real worker; incurs model usage, requires a running supervisor
+# Replace task with a role that actually exists in your OMP configuration
+OMP_WORKER_SMOKE_ROLE=task npm --prefix "$OMP_MCP_DIR" run check:worker
 ```
 
 Offline tests cover discovery, framing, idempotency, DAG cycles/blocking, concurrency/resource/workspace locks, cancellation, logs/artifacts, MCP disconnect survival, restart, six crash phases, PID mismatch and database failures. Systemd transient-service survival has been locally tested. Real-model end-to-end and automatic host wakeup are not claimed by offline tests; upstream client verification claims do not automatically apply to this fork.

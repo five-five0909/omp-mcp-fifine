@@ -4,39 +4,190 @@
 
 基于 `omp-worker-mcp` 0.2.0（来源提交 `e41ab1a`）派生，保留原 MIT LICENSE 和版权声明。原工程与原 MCP 配置无需修改。
 
-## 环境
+[English](README.md) · 简体中文
 
-- Linux / WSL，要求 `/proc`、Unix socket；目前不支持原生 Windows/macOS supervisor。
-- Node.js >= 22.13，使用内置 `node:sqlite`，无需 npm 依赖。当前验证 Node 26.8.1。
-- 安装并认证 OMP。当前检查目标版本为 18.18.7；离线测试无需 OMP 或 API 凭据。
-- 持久后台模式使用 systemd 用户管理器。WSL 关闭/系统重启后需重新启动服务；不自动安装开机服务、不修改 linger。
+## 安装：从克隆到首次调用
 
-## 启动
+**安装方式是克隆源码直接运行，不需要构建或 `npm install`。** 本项目不安装 OMP，也不包含模型账号或额度。要正常执行任务，必须同时准备好 OMP、独立 supervisor 和 MCP 客户端。
 
-所有路径都为系统绝对路径。新工程默认数据目录为 `~/.omp/omp-mcp-fifine`，不使用原工程数据。
+### 1. 检查环境
 
-```bash
-# 前台 supervisor，适合调试；保持这个进程运行
-node /opt/dev-space/omp-mcp-fifine/src/supervisor.js start
-
-# 或显式启动临时 systemd 用户服务，不依赖当前终端
-node /opt/dev-space/omp-mcp-fifine/src/service.js start
-node /opt/dev-space/omp-mcp-fifine/src/service.js status
-node /opt/dev-space/omp-mcp-fifine/src/service.js logs
-
-# 停止调度器：已授权 runner 继续，排队任务待下次启动
-node /opt/dev-space/omp-mcp-fifine/src/service.js stop
-```
-
-不要同时运行前台和服务模式。内核抽象 socket 锁阻止同一数据目录的双 supervisor。服务停止使用 `KillMode=process`，不将停止调度器等同于取消 worker；取消请调用 `cancel`。
-
-生成客户端配置，不自动写入配置文件：
+| 前置条件 | 要求 |
+|---|---|
+| 操作系统 | Linux / WSL，可访问 `/proc` 和 Unix socket；本项目 supervisor 暂不支持原生 Windows/macOS |
+| Node.js | >= 22.13，必须能加载内置 `node:sqlite`；本机已验证 Node 26.8.1 |
+| Git | 用于克隆和更新源码 |
+| OMP | 已安装、配置模型并完成认证；本机发现接口已验证 OMP 18.18.7 |
+| systemd 用户管理器 | 仅后台服务模式需要；没有时可使用前台模式 |
 
 ```bash
-node /opt/dev-space/omp-mcp-fifine/scripts/client-config.js standard-json
+git --version
+node --version
+node -e "require('node:sqlite'); console.log('SQLite OK')"
 ```
 
-MCP 启动命令是 `node /opt/dev-space/omp-mcp-fifine/src/server.js`。为兼容原接口，生成器仍使用服务名 `omp`；若新旧并存，请手动将新条目命名为 `omp-fifine`，不要覆盖现有条目。MCP 不会自动拉起 supervisor，找不到它时返回启动提示。自定义 `OMP_WORKER_HOME` 时，MCP 与 supervisor 必须使用相同绝对路径。
+WSL 用户请在 **WSL 内部**执行全部安装和启动命令，不要在 Windows PowerShell 中运行 Linux 路径。本项目的 Linux 限制不代表 OMP 自身的平台限制。
+
+### 2. 安装并配置 OMP
+
+如果 `omp --version` 已正常工作，可以跳过安装。尚未安装时，请先查看 [OMP 官方安装说明](https://omp.sh)，确认安装脚本后再执行官方命令：
+
+```bash
+curl -fsSL https://omp.sh/install | sh
+```
+
+按安装器提示更新当前终端的 PATH，或重新打开终端，然后检查：
+
+```bash
+command -v omp
+omp --version
+# 使用 OAuth 提供商时，交互选择提供商并完成登录
+omp login
+# 已用 API key/自定义提供商配置完成认证的用户，不必再做 OAuth 登录
+omp models
+omp config get modelRoles --json
+omp config path
+```
+
+先确认 OMP 能列出你有权使用的模型。OAuth 可用 `omp login`；API key 和自定义提供商应按 OMP 自身的配置方式设置。不要把密钥写入本工程或 MCP JSON。
+
+本桥接器默认使用 Agent 的 `task` 角色；**能列出模型不代表已有 `task` 角色**。如果尚未配置角色，在 `omp config path` 返回目录中的 `config.yml` 合并以下映射，不要覆盖其他配置：
+
+```yaml
+modelRoles:
+  task: your-provider/your-model-id
+```
+
+将 `your-provider/your-model-id` 替换为 `omp models` 中实际可用的完整模型标识。也可以不增加角色，在每次 `run` 中显式传入 `model`，或传入已经存在的 `role`；`role` 与 `model` 二选一。
+
+### 3. 克隆并检查本工程
+
+以下默认安装到用户目录，不需要 root。`OMP_MCP_DIR` 是本说明使用的源码路径变量，不是项目必需的配置项。
+
+```bash
+export OMP_MCP_DIR="$HOME/omp-mcp-fifine"
+git clone https://github.com/five-five0909/omp-mcp-fifine.git "$OMP_MCP_DIR"
+
+# 检查 OMP 二进制、角色配置和 Agent 列表；不发送模型请求
+# 在克隆目录中运行，避免项目级 OMP 配置从其他目录加载
+(cd "$OMP_MCP_DIR" && node src/server.js --self-check)
+
+# 离线回归：使用临时 fixture，不调用付费模型、不需要模型凭据
+npm --prefix "$OMP_MCP_DIR" run check
+```
+
+`--self-check` 不查询模型目录，也不向提供商验证凭据；即使缺少 `task` 角色也可能返回 `ok:true`，需检查返回的 `roles`，按上文显式指定模型/角色。后续调用 MCP `models` / `roles` 时应传入目标项目的 `cwd`，因为不同工作区的 OMP 配置可能不同。
+
+本机工程位于 `/opt/dev-space/omp-mcp-fifine`；使用这个已有目录时，只需 `export OMP_MCP_DIR=/opt/dev-space/omp-mcp-fifine`，不要再次克隆到非空目录。安装到其他系统目录时，先确保当前用户有写权限；不要为了运行模型任务而默认使用 root。
+
+### 4. 启动独立调度器（二选一）
+
+**推荐：systemd 临时用户服务。** 适合客户端/终端关闭后继续调度任务。
+
+```bash
+# 检查用户服务管理器是否可用；无法连接时改用下面的前台模式
+systemctl --user is-system-running
+node "$OMP_MCP_DIR/src/service.js" start
+node "$OMP_MCP_DIR/src/service.js" status
+node "$OMP_MCP_DIR/src/supervisor.js" status
+```
+
+`supervisor.js status` 返回含 `pid`、`max_concurrency` 和状态计数的 JSON，表示调度接口可访问。服务启动是异步的，刚启动时查询若未连接，可先查看服务状态和日志确认启动结果：
+
+```bash
+node "$OMP_MCP_DIR/src/service.js" logs
+```
+
+**替代：前台模式。** 不需要 systemd，但必须保持该进程和终端运行；另开终端使用 MCP 客户端。
+
+```bash
+node "$OMP_MCP_DIR/src/supervisor.js" start
+# 看到 supervisor ready 后，再连接 MCP 客户端
+```
+
+两种模式不要同时启动。同一个运行数据目录只允许一个 supervisor。systemd 模式是临时服务，不是开机自启；WSL 关闭、机器重启或用户管理器退出后需重新启动。不会自动启用 linger，也不保证用户完全注销后服务仍然存活。
+
+### 5. 接入 MCP 客户端
+
+用生成器得到当前机器上的 **Node 和 server.js 绝对路径**，不要把别人的安装路径直接粘贴到自己配置里：
+
+```bash
+# CodeBuddy、Cursor 等使用 mcpServers JSON 的客户端
+node "$OMP_MCP_DIR/scripts/client-config.js" standard-json
+# Claude Code：输出安装命令，需自行执行输出的命令
+node "$OMP_MCP_DIR/scripts/client-config.js" claude
+# Codex：输出 TOML 配置片段
+node "$OMP_MCP_DIR/scripts/client-config.js" codex
+# 查看其他客户端
+node "$OMP_MCP_DIR/scripts/client-config.js" --help
+```
+
+生成器**只打印**配置或命令，不会自动完成安装。将片段合并到客户端现有 MCP 配置，不要覆盖整份配置；CLI 安装命令则在检查后执行。配置完成后刷新 MCP 或新建客户端会话。
+
+- 生成器默认服务名是 `omp`。若已接入旧版 OMP MCP，请将新条目/安装命令中的服务名改为 `omp-fifine`，避免覆盖；调用时选择新服务。
+- MCP 的入口是 `src/server.js`，不是 `src/supervisor.js`；前者由客户端启动，后者须在第 4 步独立启动。
+- MCP 不会自动拉起 supervisor。两边必须以**相同 Linux 用户**运行，并使用相同 OMP 配置及 `OMP_WORKER_HOME`。
+- 默认运行数据在 `~/.omp/omp-mcp-fifine`，与源码目录、原工程数据分离。自定义路径时，在 MCP 条目的 `env` 和启动 supervisor 的环境里设置相同绝对路径；不要只设置一边。
+- 图形客户端可能没有终端的 PATH；找不到 OMP 时，将 `command -v omp` 的绝对路径设为 `OMP_BIN`，并保持两侧一致。
+- 客户端工具调用超时应大于传给 `wait` 的等待时长；较短等待超时后继续 `wait` 即可，不代表任务失败。
+
+### 6. 验证首次任务
+
+让客户端先调用新服务的 `supervisor_status`，再用 `models` 或 `roles`（传入目标项目的绝对路径 `cwd`）找到可用选择。随后调用 `run`（替换绝对目录和模型 ID）：
+
+```json
+{
+  "prompt": "Reply with exactly PONG and nothing else.",
+  "cwd": "/absolute/path/to/an/existing/project",
+  "model": "your-provider/your-model-id",
+  "access": "read",
+  "max_time_sec": 60,
+  "idempotency_key": "installation-smoke-1"
+}
+```
+
+取返回的 `job_id` 调用 `wait`：
+
+```json
+{"job_id":"<run 返回的 job_id>","timeout_sec":90}
+```
+
+看到 `status: succeeded` 和 `result` 中的 `PONG` 才表示首次执行成功；`run` 接受任务只表示已入队。**这一步会真实调用模型，可能产生费用。** 离线 `npm run check` 不能替代模型认证和网络验证。再次刻意执行测试时更换幂等键；同键同输入会返回原任务。
+
+## 停止、更新与排错
+
+停止 systemd 模式的调度器：
+
+```bash
+node "$OMP_MCP_DIR/src/service.js" stop
+```
+
+仅前台模式使用 Ctrl+C，或在另一终端运行 `node "$OMP_MCP_DIR/src/supervisor.js" stop`。systemd 模式务必使用 `service.js stop`：服务有失败重启策略，直接退出 supervisor 可能触发重新启动。
+
+停止 supervisor 不等于取消任务：已授权 runner 会继续，pending/DAG 后续节点在重启调度器后推进。要停止任务请调用 `cancel` 并检查结果。
+
+更新源码前先检查工作区；以下以 systemd 模式为例。尽量等正在运行的任务结束后再更新，避免在执行中替换代码：
+
+```bash
+git -C "$OMP_MCP_DIR" status --short
+# 有本地修改时先自行保存；不要用强制重置覆盖
+node "$OMP_MCP_DIR/src/service.js" stop &&
+  git -C "$OMP_MCP_DIR" pull --ff-only &&
+  npm --prefix "$OMP_MCP_DIR" run check &&
+  node "$OMP_MCP_DIR/src/service.js" start
+```
+
+`&&` 会在拉取或测试失败时停止，先排查失败，不要跳过错误直接启动。然后刷新客户端 MCP，使适配层也加载新代码。新终端如未设置变量，先重新 `export OMP_MCP_DIR=你的绝对安装路径`。
+
+| 问题 | 检查方法 |
+|---|---|
+| `node:sqlite` 加载失败 | 检查客户端实际使用的 Node 版本；重新生成配置，确保不是旧 Node |
+| `omp binary not found` | 检查 `command -v omp`、两侧 PATH 和 `OMP_BIN`，重启服务后再试 |
+| `Unknown model role: task` | 配置真实 `task` 角色，或在 `run` 中显式指定已有 role / 完整 model |
+| `supervisor unavailable` | 独立启动 supervisor，确认同用户、同 `OMP_WORKER_HOME`，查看服务日志 |
+| `systemctl --user` 无法连接 | 使用前台模式；不要把它当成 MCP 或模型配置错误 |
+| 终端可调用、客户端报认证失败 | 核对两侧 OMP 配置、凭据变量和 shell 环境；不要将密钥贴入日志或仓库 |
+| 任务 `unknown` / 下游 `blocked` | 查看状态及日志并人工核实；不要盲目重复提交，不要为通过检查随意标成功 |
 
 ## MCP 工具
 
@@ -129,13 +280,14 @@ MCP 启动命令是 `node /opt/dev-space/omp-mcp-fifine/src/server.js`。为兼�
 ## 验证
 
 ```bash
-npm --prefix /opt/dev-space/omp-mcp-fifine run check
+npm --prefix "$OMP_MCP_DIR" run check
 # 显式临时服务测试，使用 fixture，不调用付费模型
-node /opt/dev-space/omp-mcp-fifine/scripts/test-service.js
-# 真实 OMP，可能产生费用；先启动 supervisor 并选择有效 role
-OMP_WORKER_SMOKE_ROLE=default npm --prefix /opt/dev-space/omp-mcp-fifine run check:worker
+npm --prefix "$OMP_MCP_DIR" run check:service
+# 真实 OMP，可能产生费用；先启动 supervisor
+# 将 task 替换为你实际配置的角色名
+OMP_WORKER_SMOKE_ROLE=task npm --prefix "$OMP_MCP_DIR" run check:worker
 ```
 
 离线测试覆盖角色/模型解析、客户端配置、两种 MCP framing、提交去重、DAG 环/失败阻塞、并发和逻辑资源锁、重叠工作区串行、日志上限、产物、MCP 断连后继续执行、supervisor 重启及六阶段故障注入、PID 身份不匹配、数据库写失败和损坏拒绝。
 
-真实模型调用不属于默认离线回归，不宣称已完成全客户端/全 OMP 版本实测。systemd 临时服务独立运行已在本机验证；不安装开机自启，不修改现有客户端、不公开发布。
+真实模型调用不属于默认离线回归，不宣称已完成全客户端/全 OMP 版本实测。systemd 临时服务独立运行已在本机验证；安装过程不会启用开机自启、修改现有客户端配置或上传用户运行数据。
