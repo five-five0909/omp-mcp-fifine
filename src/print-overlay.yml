@@ -1,0 +1,8 @@
+# Lean overlay for headless omp-worker-mcp print-mode jobs.
+# Disables advisor/autolearn so the selected role/agent does the work.
+advisor:
+  enabled: false
+autolearn:
+  enabled: false
+inspect_image:
+  mode: "off"

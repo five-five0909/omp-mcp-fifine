@@ -1,0 +1,12 @@
+{
+  "mcp": {
+    "servers": {
+      "omp": {
+        "type": "stdio",
+        "command": "/absolute/path/to/node",
+        "args": ["/absolute/path/to/omp-worker-mcp/src/server.js"],
+        "timeoutMs": 3600000
+      }
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "omp": {
+      "transport": "stdio",
+      "command": "/absolute/path/to/node",
+      "args": ["/absolute/path/to/omp-worker-mcp/src/server.js"]
+    }
+  }
+}

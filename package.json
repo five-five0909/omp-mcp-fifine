@@ -1,0 +1,44 @@
+{
+  "name": "omp-mcp-fifine",
+  "version": "0.3.0",
+  "description": "Persistent local OMP orchestration with a supervisor, transactional DAG queue and MCP bridge.",
+  "license": "MIT",
+  "bin": {
+    "omp-mcp-fifine": "./src/server.js",
+    "omp-fifine-supervisor": "./src/supervisor.js"
+  },
+  "files": [
+    "LICENSE",
+    "README.md",
+    "README.zh-CN.md",
+    "SKILL.md",
+    "assets/",
+    "docs/",
+    "examples/",
+    "scripts/",
+    "src/"
+  ],
+  "scripts": {
+    "check": "node --check src/server.js && node --check src/supervisor.js && node --check src/runner.js && node scripts/test-parse.js && node scripts/test-client-config.js && node scripts/test-store.js && node scripts/test-supervisor.js && node scripts/test-faults.js && node scripts/smoke-mcp.js && node scripts/smoke-ndjson.js",
+    "supervisor:start": "node src/supervisor.js start",
+    "supervisor:status": "node src/supervisor.js status",
+    "supervisor:stop": "node src/supervisor.js stop",
+    "service:start": "node src/service.js start",
+    "service:status": "node src/service.js status",
+    "service:stop": "node src/service.js stop",
+    "service:logs": "node src/service.js logs",
+    "check:worker": "node scripts/smoke-worker.js",
+    "check:service": "node scripts/test-service.js",
+    "client-config": "node scripts/client-config.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "keywords": [
+    "mcp",
+    "omp",
+    "oh-my-pi",
+    "agent",
+    "subagent"
+  ]
+}

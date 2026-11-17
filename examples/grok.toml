@@ -1,0 +1,5 @@
+[mcp_servers.omp]
+command = "/absolute/path/to/node"
+args = ["/absolute/path/to/omp-worker-mcp/src/server.js"]
+startup_timeout_sec = 15
+tool_timeout_sec = 6000

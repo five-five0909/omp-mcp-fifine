@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "omp": {
+      "command": "/absolute/path/to/node",
+      "args": ["/absolute/path/to/omp-worker-mcp/src/server.js"],
+      "startupTimeoutMs": 15000,
+      "toolTimeoutMs": 3600000
+    }
+  }
+}
